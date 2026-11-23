@@ -17,7 +17,7 @@ OUT = Path(sys.argv[1] if len(sys.argv) > 1 else '/home/vlsi/fused-moe/figures')
 PEAK = 180.0
 
 # Reference palette, light mode: one accent, one contrast hue, greys for context.
-SURFACE, INK, INK2, GRID = '#fcfcfb', '#0b0b0b', '#52514e', '#e4e3df'
+SURFACE, INK, INK2, GRID = '#ffffff', '#0b0b0b', '#52514e', '#e4e3df'
 BLUE, ORANGE, AQUA, GREY = '#2a78d6', '#eb6834', '#1baf7a', '#a3a29d'
 
 plt.rcParams.update({
