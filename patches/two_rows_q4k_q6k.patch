@@ -1,0 +1,13 @@
+diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
+index 1a9cf55..111a5fb 100644
+--- a/ggml/src/ggml-cuda/mmvq.cu
++++ b/ggml/src/ggml-cuda/mmvq.cu
+@@ -584,6 +584,8 @@ static constexpr __host__ __device__ bool mmvq_two_rows_ncols1(ggml_type type) {
+         case GGML_TYPE_Q1_0:
+         case GGML_TYPE_Q2_K:
+         case GGML_TYPE_Q3_K:
++        case GGML_TYPE_Q4_K:
++        case GGML_TYPE_Q6_K:
+         case GGML_TYPE_IQ1_S:
+         case GGML_TYPE_IQ1_M:
+             return true;

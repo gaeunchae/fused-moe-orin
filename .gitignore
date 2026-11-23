@@ -1,0 +1,19 @@
+# Allow-list: only the files below are published.
+/*
+!/.gitignore
+!/README.md
+!/RESULTS.md
+!/PROFILING.md
+!/SLIDES.md
+!/patches/
+!/bench/
+!/scripts/
+!/data/
+!/figures/
+
+# bench: sources only, no compiled binaries
+/bench/*
+!/bench/*.cu
+!/bench/*.cpp
+
+__pycache__/

@@ -1,0 +1,48 @@
+--- a/ggml/src/ggml-cuda/mmvq.cu
++++ b/ggml/src/ggml-cuda/mmvq.cu
+@@ -1195,6 +1195,24 @@
+     return target;
+ }
+ 
++// Experiment for GPUs with many SMs: GGML_CUDA_MMVQ_MAXNW=4 lets rows of more than 2 warps of lanes use 4 warps,
++// GGML_CUDA_MMVQ_MINBLK=n halves rows per block until the grid has at least n blocks per SM. Unset = rule as above.
++static int mmvq_max_nwarps() {
++    static const int v = [] {
++        const char * s = getenv("GGML_CUDA_MMVQ_MAXNW");
++        return s && atoi(s) >= 4 ? 4 : 2;
++    }();
++    return v;
++}
++
++static int mmvq_min_blocks_per_sm() {
++    static const int v = [] {
++        const char * s = getenv("GGML_CUDA_MMVQ_MINBLK");
++        return s ? atoi(s) : 0;
++    }();
++    return v;
++}
++
+ // Experiment only: GGML_CUDA_MMVQ_SHAPE="warps,rows" forces one block shape (warps 1, 2 or 4; rows 1, 2, 4 or 8)
+ // for the same types, so shapes can be compared on the real kernels.
+ static int2 mmvq_forced_shape() {
+@@ -1366,12 +1384,19 @@
+                     const int sums_per_row  = fused_tmpl ? 2 : 1;
+                     const int n_mats        = fusion.gate != nullptr ? 2 : 1;
+                     const int lanes_per_row = blocks_per_row_x * (qi / vdr);
+-                    int nw = lanes_per_row <= warp_size ? 1 : 2;
++                    int nw = lanes_per_row <= warp_size ? 1 : (lanes_per_row > 2*warp_size && mmvq_max_nwarps() >= 4) ? 4 : 2;
+                     const int64_t row_bytes = ggml_row_size(type, ncols_x);
+                     int rows = 1;
+                     while (rows*n_mats*row_bytes < target && 2*rows*sums_per_row <= max_sums) {
+                         rows *= 2;
+                     }
++                    if (mmvq_min_blocks_per_sm() > 0) {
++                        const int64_t min_blocks = (int64_t) mmvq_min_blocks_per_sm() * ggml_cuda_info().devices[device].nsm;
++                        const int64_t blocks_yz  = (int64_t) (nchannels_dst + (fusion.shared_up != nullptr)) * nsamples_dst;
++                        while (rows > 1 && (int64_t) ((nrows_x + rows - 1) / rows) * blocks_yz < min_blocks) {
++                            rows /= 2;
++                        }
++                    }
+                     if (forced.x > 0) {
+                         nw   = forced.x;
+                         rows = forced.y;
