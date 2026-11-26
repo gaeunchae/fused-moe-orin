@@ -22,6 +22,21 @@ Decode speed on Orin, tokens/s at context 0:
 - **Correctness:** all 5,411 MUL_MAT, MUL_MAT_ID and MUL_MAT_FUSION tests in `test-backend-ops` pass, and perplexity is unchanged within error.
 - **Second GPU:** on an RTX 3090 the kernel-level effect reappears, but the end-to-end gain is 2 to 3%.
 
+### Other inference engines on the same Orin
+
+Decode tokens/s at batch 1, Qwen3-30B-A3B, measured on the same day with the GPU clock fixed at 1.3 GHz (median of 3 rounds):
+
+| Engine | Weights | GB read per token | Short context | 4096 context | % of 180 GB/s |
+|---|---|---:|---:|---:|---:|
+| llama.cpp master e300919 | Q4_K_M | 1.92 | 48.0 | 42.9 | 51% |
+| vLLM 0.20.0 | GPTQ INT4 | 2.06 | 59.3 | 52.2 | 68% |
+| TensorRT Edge-LLM 0.6.0 | GPTQ INT4 | 2.06 | 59.8 | 51.6 | 68% |
+| **llama.cpp + this patch** | Q4_K_M | 1.92 | **61.4** | **53.4** | 65% |
+
+- **vLLM and Edge-LLM** are 24 to 25% faster than stock llama.cpp. With the patch, llama.cpp is 2 to 3% faster than both in tokens/s.
+- **Per byte read, the other two are slightly more efficient.** They use Marlin MoE kernels. The official GPTQ checkpoint keeps the output head in FP16, so it reads 7% more bytes per token than Q4_K_M.
+- **Not a controlled comparison:** the engines read different weight formats. Scripts are in `scripts/baselines/`, raw results in `data/baselines/`, and details in `RESULTS.md` section 7.6.
+
 ## Repository layout
 
 | Path | Contents |
@@ -113,6 +128,7 @@ The shell drivers set the paths to builds, models and outputs at their top. Edit
 | `profile_breakdown.py`, `floor_breakdown.py`, `nsys_depth_sweep.sh` | Per-token time split into the transfer floor and the time above it, from node-level nsys traces. |
 | `kernel_summary.py`, `ncu_token.sh`, `ncu_summary.py`, `host_gap.py` | Kernel, Nsight Compute and host-side summaries. |
 | `make_figures.py`, `report_pdf.py` | Figures and the report PDF. |
+| `baselines/` | Install, build and benchmark scripts for vLLM and TensorRT Edge-LLM on JetPack 6.2 (no Docker, no sudo), and the same-day llama.cpp re-measurement. |
 | Others | Experiments recorded in `RESULTS.md`, including the RTX 3090 analysis. |
 
 ## Hardware used

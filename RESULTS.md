@@ -360,6 +360,54 @@ master 대비 이득은 upstream 설정이 남겨 둔 두 곳에서 나온다(ns
 - **판정:** v4(2 wave)는 채택하지 않는다. 정해 둔 대로 7.4절의 결론으로 보고서를 마무리한다.
 - **민감도 (판정에 쓰지 않음):** 기준 1 wave는 Orin에서 r8보다 느린 조합이 0개, 빠른 조합이 13개였다. 3090에서는 느린 7개, 빠른 46개였다. 기준 4 wave는 두 GPU 모두에서 더 나빴다. 1 wave는 결과를 본 뒤 고른 값이라, 채택하려면 이 sweep에 없는 데이터(실제 모델, 두 GPU)로 따로 검증해야 한다.
 
+### 7.6 다른 추론 엔진과의 비교 (2026-11-25)
+
+**질문:** llama.cpp보다 강한 기준선이 있는가? Orin에서 Qwen3-30B-A3B를 batch 1로 돌릴 수 있는 공개 엔진 두 개, vLLM과 NVIDIA TensorRT Edge-LLM을 같은 장비에서 쟀다. 측정 조건은 모두 같다: 같은 날, GPU 클럭 1300.5 MHz 고정(측정 전후 확인), 다른 GPU 작업 없음.
+
+| 엔진 | 버전 | 모델 파일 | 측정 방법 |
+|---|---|---|---|
+| llama.cpp master / + 우리 patch | e300919 | Q4_K_M (토큰당 1.92 GB) | `llama-bench -p 0 -n 64 -r 5 -d 0,4096`, 두 빌드를 번갈아 2바퀴 |
+| vLLM | 0.20.0 (Jetson wheel, torch 2.11) | `Qwen/Qwen3-30B-A3B-GPTQ-Int4` (토큰당 2.06 GB) | `vllm serve` + `vllm bench serve`: 동시 요청 1개, 입력 64/4096 토큰, 출력 128 토큰(EOS 무시). 디코드 속도 = 1000 / TPOT 중앙값. 3바퀴 |
+| TensorRT Edge-LLM | v0.6.0 (JetPack 6.2는 "호환", 실험적) | 같은 GPTQ 파일 | NVIDIA 표와 같은 `llm_inference --warmup 10 --dumpProfile` (긴 입력은 warmup 5). 입력 61/4096 토큰(채팅 템플릿 없음), greedy 128 토큰. 3번 |
+
+토큰당 읽는 바이트는 `scripts/baselines/bytes_per_token_st.py`로 계산했다. GPTQ 파일은 출력층을 FP16(0.62 GB)으로 두기 때문에 Q4_K_M보다 7% 더 읽는다(상한 87.4 tok/s, Q4_K_M은 94 tok/s).
+
+**결과 (디코드 tok/s, 3바퀴 중앙값, 괄호는 범위):**
+
+| 엔진 | 짧은 컨텍스트 | 4096 컨텍스트 | 180 GB/s 대비 (짧은 컨텍스트) | 우리 대비 (짧은 / 4096) |
+|---|---:|---:|---:|---:|
+| llama.cpp master | 48.0 (47.8~48.1) | 42.9 | 51.2% | −21.8% / −19.6% |
+| vLLM 0.20.0 | 59.3 (59.3~59.4) | 52.2 | 67.9% | −3.3% / −2.3% |
+| TensorRT Edge-LLM 0.6.0 | 59.8 (59.7~59.8) | 51.6 | 68.4% | −2.6% / −3.3% |
+| **llama.cpp + 우리 patch** | **61.4** | **53.4** | 65.4% | |
+
+**해석**
+- **vLLM과 Edge-LLM은 원래 llama.cpp(master)보다 24~25% 빠르다.** llama.cpp보다 강한 기준선이 있다는 말이 맞았다.
+- **우리 patch를 넣은 llama.cpp는 두 엔진보다 2.3~3.3% 빠르다.** 측정한 네 엔진 중 가장 빠르다.
+- **다만 바이트당 효율은 두 엔진이 약간 높다** (68%와 65%).
+  - 두 엔진 모두 MoE에 Marlin 계열 kernel을 쓴다. vLLM은 로그상 "MARLIN WNA16 MoE backend"이고, Edge-LLM은 `marlin_moe_wna16` 기반 INT4 MoE plugin이다.
+  - 우리의 tok/s 우위는 Q4_K_M이 출력층까지 양자화해서 토큰당 7% 덜 읽기 때문이다.
+  - 같은 파일로 비교한 것이 아니므로 통제된 비교는 아니다. 두 엔진은 GGUF를 읽지 못하고, llama.cpp는 GPTQ를 읽지 못한다.
+- **NVIDIA 공식 표와 비교 (Orin 64GB, INT4 GPTQ, batch 1)**
+  - 공식 값: prefill 61토큰 91.0 ms, 디코드 56.7 tok/s.
+  - 여기서 잰 값: prefill 88~90 ms로 같고, 디코드는 59.8로 더 높다.
+  - 차이의 원인은 버전(공식 표는 v0.9 계열로 보이며 JetPack 7.2)이나 입력(MTBench와 채팅 템플릿)일 수 있다. 확인하지 않았다.
+- **Edge-LLM의 Generation 시간은 경과 시간으로 봐도 된다.** 생성 단계 전체(127토큰)를 GPU 이벤트 한 쌍으로 감싸서 잰다(profile JSON의 `total_runs: 1`). 그래서 토큰 사이 호스트 시간도 포함되고, llama-bench나 TPOT와 같은 기준이다.
+
+**설치에서 생긴 일 (재현용)**
+- **Docker를 쓰지 못했다.** 루트 디스크가 4.7 GB만 남았고, 이미지 저장 위치를 바꾸려면 sudo가 필요하다. 그래서 NVMe에 가상환경을 만들었다.
+- **vLLM:** Jetson index(`pypi.jetson-ai-lab.io/jp6/cu126`)의 wheel은 의존성이 빠져 있었다.
+  - `libcudss.so.0`은 NVIDIA redist의 cuDSS 0.8.0 linux-aarch64 cuda12를 받아 `LD_LIBRARY_PATH`에 넣었다.
+  - xgrammar 0.1.32, triton 3.6.0, compressed-tensors 0.15.0.1, loguru는 모두 `--no-deps`로 설치했다. torch를 바꾸지 않기 위해서다.
+  - Triton이 CUDA 헤더와 sm_87용 ptxas를 찾지 못해서 `CPATH=/usr/local/cuda/include`, `TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas`를 지정했다.
+  - 서버 시작에는 240초가 걸렸다(torch.compile과 CUDA graph 캡처 포함).
+- **Edge-LLM:**
+  - C++ 런타임은 `EMBEDDED_TARGET=jetson-orin`(CUDA 12.6, sm_87, TensorRT 10.3)으로 빌드했다.
+  - 문서상 모델 변환은 x86에서 하지만, MoE 변환은 CPU 전용이라 Orin의 CPU에서 했다. CPU용 torch 2.10을 썼고, 일시정지 시간을 빼면 약 14분 걸렸다.
+  - gptqmodel 설치가 transformers를 5.x로 올려서, transformers 4.57.6과 tokenicer 0.0.5로 되돌렸다.
+  - 엔진 빌드에서 plugin을 찾게 하려면 `EDGELLM_PLUGIN_PATH`를 절대 경로로 줘야 했다. 기본값은 상대 경로다. 최대 batch 1로 2.5분 만에 빌드됐고, 엔진은 16.1 GB다.
+- **기록 위치:** 스크립트는 `scripts/baselines/`, 결과는 `data/baselines/`, 큰 파일(모델, 엔진, 가상환경)은 `/media/vlsi/NVMESSD/fused-moe/baselines/`와 `/media/vlsi/NVMESSD/gguf/gptq/`에 있다.
+
 ## 8. 배운 점과 한계
 
 ### 8.1 틀린 예측과 실제
